@@ -4,7 +4,13 @@ import { MODAL_CONFIRM } from '@/app/constants';
 import { SupportedProtocols, useSSOStore } from '../sso.store';
 import { useI18n } from '@n8n/i18n';
 
-import { N8nButton, N8nInput, N8nOption, N8nSelect } from '@n8n/design-system';
+import {
+	N8nButton,
+	N8nCallout,
+	N8nInput,
+	N8nOption,
+	N8nSelect,
+} from '@n8n/design-system';
 import { computed, onMounted, ref } from 'vue';
 import { useToast } from '@/app/composables/useToast';
 import { useMessage } from '@/app/composables/useMessage';
@@ -24,6 +30,7 @@ const message = useMessage();
 
 const savingForm = ref<boolean>(false);
 const roleMappingRuleEditorRef = ref<InstanceType<typeof RoleMappingRuleEditor> | null>(null);
+const isOverrideActive = computed(() => ssoStore.oidcConfiguredByEnv);
 
 const discoveryEndpoint = ref('');
 const clientId = ref('');
@@ -211,7 +218,9 @@ const onTest = async () => {
 	}
 };
 
-const hasUnsavedChanges = computed(() => !cannotSaveOidcSettings.value && !savingForm.value);
+const hasUnsavedChanges = computed(
+	() => !cannotSaveOidcSettings.value && !savingForm.value && !isOverrideActive.value,
+);
 
 defineExpose({ hasUnsavedChanges, onSave: onOidcSettingsSave });
 
@@ -221,6 +230,9 @@ onMounted(async () => {
 </script>
 <template>
 	<div>
+		<N8nCallout v-if="isOverrideActive" theme="info" :class="$style.group">
+			{{ i18n.baseText('settings.sso.settings.oidc.overrideBanner') }}
+		</N8nCallout>
 		<div :class="$style.card">
 			<slot name="protocol-select" />
 			<div :class="$style.group">
@@ -236,6 +248,7 @@ onMounted(async () => {
 				<label>Discovery Endpoint</label>
 				<N8nInput
 					:model-value="discoveryEndpoint"
+					:disabled="isOverrideActive"
 					type="text"
 					data-test-id="oidc-discovery-endpoint"
 					placeholder="https://accounts.google.com/.well-known/openid-configuration"
@@ -247,6 +260,7 @@ onMounted(async () => {
 				<label>Client ID</label>
 				<N8nInput
 					:model-value="clientId"
+					:disabled="isOverrideActive"
 					type="text"
 					data-test-id="oidc-client-id"
 					@update:model-value="(v: string) => (clientId = v)"
@@ -259,6 +273,7 @@ onMounted(async () => {
 				<label>Client Secret</label>
 				<N8nInput
 					:model-value="clientSecret"
+					:disabled="isOverrideActive"
 					type="password"
 					data-test-id="oidc-client-secret"
 					@update:model-value="(v: string) => (clientSecret = v)"
@@ -272,6 +287,7 @@ onMounted(async () => {
 				<label>Prompt</label>
 				<N8nSelect
 					:model-value="prompt"
+					:disabled="isOverrideActive"
 					data-test-id="oidc-prompt"
 					@update:model-value="handlePromptChange"
 				>
@@ -305,6 +321,7 @@ onMounted(async () => {
 				<N8nInput
 					:model-value="authenticationContextClassReference"
 					type="textarea"
+					:disabled="isOverrideActive"
 					data-test-id="oidc-authentication-context-class-reference"
 					placeholder="mfa, phrh, pwd"
 					@update:model-value="(v: string) => (authenticationContextClassReference = v)"
@@ -325,6 +342,7 @@ onMounted(async () => {
 					<N8nSelect
 						:model-value="ssoStore.isOidcLoginEnabled ? 'enabled' : 'disabled'"
 						data-test-id="sso-oidc-toggle"
+						:disabled="isOverrideActive"
 						@update:model-value="ssoStore.isOidcLoginEnabled = $event === 'enabled'"
 					>
 						<template #prefix>
@@ -339,6 +357,7 @@ onMounted(async () => {
 
 		<div :class="$style.buttons">
 			<N8nButton
+				v-if="!isOverrideActive"
 				data-test-id="sso-oidc-save"
 				size="large"
 				:loading="savingForm"
