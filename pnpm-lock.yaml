@@ -2502,9 +2502,6 @@ importers:
       fast-glob:
         specifier: 'catalog:'
         version: 3.2.12
-      fastest-levenshtein:
-        specifier: 'catalog:'
-        version: 1.0.16
       flat:
         specifier: 5.0.2
         version: 5.0.2
