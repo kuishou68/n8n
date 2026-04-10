@@ -9,7 +9,6 @@ import type {
 	InstanceAiNodeService,
 	InstanceAiDataTableService,
 	InstanceAiWebResearchService,
-	InstanceAiFilesystemService,
 	FetchedPage,
 	WebSearchResponse,
 	DataTableSummary,
@@ -188,13 +187,12 @@ export class InstanceAiAdapterService {
 	createContext(
 		user: User,
 		options?: {
-			filesystemService?: InstanceAiFilesystemService;
 			searchProxyConfig?: ServiceProxyConfig;
 			pushRef?: string;
 			threadId?: string;
 		},
 	): InstanceAiContext {
-		const { filesystemService, searchProxyConfig, pushRef, threadId } = options ?? {};
+		const { searchProxyConfig, pushRef, threadId } = options ?? {};
 		return {
 			userId: user.id,
 			workflowService: this.createWorkflowAdapter(user, threadId),
@@ -205,7 +203,6 @@ export class InstanceAiAdapterService {
 			webResearchService: this.createWebResearchAdapter(user, searchProxyConfig),
 			workspaceService: this.createWorkspaceAdapter(user),
 			licenseHints: this.buildLicenseHints(),
-			...(filesystemService ? { filesystemService } : {}),
 		};
 	}
 
@@ -222,6 +219,14 @@ export class InstanceAiAdapterService {
 			);
 		}
 		return hints;
+	}
+
+	private assertInstanceNotReadOnly(resourceType: string) {
+		if (this.sourceControlPreferencesService.getPreferences().branchReadOnly) {
+			throw new Error(
+				`Cannot modify ${resourceType} on a protected instance. This instance is in read-only mode.`,
+			);
+		}
 	}
 
 	private createProjectScopeHelpers(user: User) {
@@ -263,6 +268,7 @@ export class InstanceAiAdapterService {
 			allowSendingParameterValues,
 			telemetry,
 		} = this;
+		const assertNotReadOnly = () => this.assertInstanceNotReadOnly('workflows');
 		const { resolveProjectId } = this.createProjectScopeHelpers(user);
 		const redactParameters = !allowSendingParameterValues;
 
@@ -303,10 +309,12 @@ export class InstanceAiAdapterService {
 			},
 
 			async archive(workflowId: string) {
+				assertNotReadOnly();
 				await workflowService.archive(user, workflowId, { skipArchived: true });
 			},
 
 			async delete(workflowId: string) {
+				assertNotReadOnly();
 				await workflowService.delete(user, workflowId);
 			},
 
@@ -346,6 +354,7 @@ export class InstanceAiAdapterService {
 			},
 
 			async createFromWorkflowJSON(json: WorkflowJSON, options?: { projectId?: string }) {
+				assertNotReadOnly();
 				const projectId = await resolveProjectId(['workflow:create'], options?.projectId);
 
 				// Strip redactionPolicy if the user lacks the required scope —
@@ -419,6 +428,7 @@ export class InstanceAiAdapterService {
 				json: WorkflowJSON,
 				_options?: { projectId?: string },
 			) {
+				assertNotReadOnly();
 				// Strip redactionPolicy if the user lacks the required scope —
 				// mirrors the check in createFromWorkflowJSON() and WorkflowService.update().
 				const settings = (json.settings ?? {}) as IWorkflowSettings;
@@ -561,6 +571,7 @@ export class InstanceAiAdapterService {
 			roleService,
 			telemetry,
 		} = this;
+		const assertNotReadOnly = () => this.assertInstanceNotReadOnly('executions');
 
 		const DEFAULT_TIMEOUT_MS = 5 * Time.minutes.toMilliseconds;
 		const MAX_TIMEOUT_MS = 10 * Time.minutes.toMilliseconds;
@@ -645,6 +656,7 @@ export class InstanceAiAdapterService {
 			},
 
 			async run(workflowId: string, inputData, options) {
+				assertNotReadOnly();
 				const workflow = await workflowFinderService.findWorkflowForUser(workflowId, user, [
 					'workflow:execute',
 				]);
@@ -800,6 +812,7 @@ export class InstanceAiAdapterService {
 			},
 
 			async stop(executionId: string) {
+				assertNotReadOnly();
 				await assertExecutionAccess(executionId, ['workflow:execute']);
 				if (!activeExecutions.has(executionId)) {
 					return {
@@ -1035,19 +1048,72 @@ export class InstanceAiAdapterService {
 
 				return results;
 			},
+
+			async getAccountContext(credentialId: string) {
+				const credential = await credentialsFinderService.findCredentialForUser(
+					credentialId,
+					user,
+					['credential:read'],
+				);
+
+				if (!credential) {
+					return { accountIdentifier: undefined };
+				}
+
+				const mask = (id: string): string => {
+					const atIdx = id.indexOf('@');
+					if (atIdx > 0) {
+						const local = id.slice(0, atIdx);
+						const domain = id.slice(atIdx);
+						const keep = Math.min(2, local.length);
+						return local.slice(0, keep) + '***' + domain;
+					}
+					if (id.length <= 3) return id;
+					return id.slice(0, 2) + '***' + id.slice(-1);
+				};
+
+				try {
+					// Use redacted decryption first — accountIdentifier is not a
+					// password field so it survives redaction. This avoids exposing
+					// the full secret payload (tokens, keys) in memory.
+					const redacted = credentialsService.decrypt(credential, false);
+
+					if (typeof redacted.accountIdentifier === 'string' && redacted.accountIdentifier) {
+						return { accountIdentifier: mask(redacted.accountIdentifier) };
+					}
+
+					for (const key of ['email', 'user', 'username', 'account', 'serviceAccountEmail']) {
+						const value = redacted[key];
+						if (typeof value === 'string' && value) {
+							return { accountIdentifier: mask(value) };
+						}
+					}
+
+					// Fallback for legacy credentials: oauthTokenData is blanked by
+					// redaction, so we need unredacted access here only.
+					const raw = credentialsService.decrypt(credential, true);
+					const tokenData = raw.oauthTokenData;
+					if (tokenData && typeof tokenData === 'object') {
+						const { OauthService } = await import('@/oauth/oauth.service');
+						const identifier = OauthService.extractAccountIdentifier(
+							tokenData as Record<string, unknown>,
+						);
+						if (identifier) {
+							return { accountIdentifier: mask(identifier) };
+						}
+					}
+
+					return { accountIdentifier: undefined };
+				} catch {
+					return { accountIdentifier: undefined };
+				}
+			},
 		};
 	}
 
 	private createDataTableAdapter(user: User): InstanceAiDataTableService {
-		const { dataTableService, dataTableRepository, sourceControlPreferencesService } = this;
-
-		const assertInstanceNotReadOnly = () => {
-			if (sourceControlPreferencesService.getPreferences().branchReadOnly) {
-				throw new Error(
-					'Cannot modify data tables on a protected instance. This instance is in read-only mode.',
-				);
-			}
-		};
+		const { dataTableService, dataTableRepository } = this;
+		const assertNotReadOnly = () => this.assertInstanceNotReadOnly('data tables');
 
 		const { resolveProjectId } = this.createProjectScopeHelpers(user);
 
@@ -1081,7 +1147,7 @@ export class InstanceAiAdapterService {
 			},
 
 			async create(name, columns, options) {
-				assertInstanceNotReadOnly();
+				assertNotReadOnly();
 				const projectId = await resolveProjectId(['dataTable:create'], options?.projectId);
 				const result = await dataTableService.createDataTable(projectId, { name, columns });
 
@@ -1096,7 +1162,7 @@ export class InstanceAiAdapterService {
 			},
 
 			async delete(dataTableId) {
-				assertInstanceNotReadOnly();
+				assertNotReadOnly();
 				const projectId = await resolveProjectIdForTable(['dataTable:delete'], dataTableId);
 				await dataTableService.deleteDataTable(dataTableId, projectId);
 			},
@@ -1115,7 +1181,7 @@ export class InstanceAiAdapterService {
 			},
 
 			async addColumn(dataTableId, column) {
-				assertInstanceNotReadOnly();
+				assertNotReadOnly();
 				const projectId = await resolveProjectIdForTable(['dataTable:update'], dataTableId);
 				const result = await dataTableService.addColumn(dataTableId, projectId, column);
 				return {
@@ -1127,13 +1193,13 @@ export class InstanceAiAdapterService {
 			},
 
 			async deleteColumn(dataTableId, columnId) {
-				assertInstanceNotReadOnly();
+				assertNotReadOnly();
 				const projectId = await resolveProjectIdForTable(['dataTable:update'], dataTableId);
 				await dataTableService.deleteColumn(dataTableId, projectId, columnId);
 			},
 
 			async renameColumn(dataTableId, columnId, newName) {
-				assertInstanceNotReadOnly();
+				assertNotReadOnly();
 				const projectId = await resolveProjectIdForTable(['dataTable:update'], dataTableId);
 				await dataTableService.renameColumn(dataTableId, projectId, columnId, {
 					name: newName,
@@ -1150,7 +1216,7 @@ export class InstanceAiAdapterService {
 			},
 
 			async insertRows(dataTableId, rows) {
-				assertInstanceNotReadOnly();
+				assertNotReadOnly();
 				const projectId = await resolveProjectIdForTable(['dataTable:writeRow'], dataTableId);
 				const result = await dataTableService.insertRows(
 					dataTableId,
@@ -1162,7 +1228,7 @@ export class InstanceAiAdapterService {
 			},
 
 			async updateRows(dataTableId, filter, data) {
-				assertInstanceNotReadOnly();
+				assertNotReadOnly();
 				const projectId = await resolveProjectIdForTable(['dataTable:writeRow'], dataTableId);
 				const result = await dataTableService.updateRows(
 					dataTableId,
@@ -1174,7 +1240,7 @@ export class InstanceAiAdapterService {
 			},
 
 			async deleteRows(dataTableId, filter) {
-				assertInstanceNotReadOnly();
+				assertNotReadOnly();
 				const projectId = await resolveProjectIdForTable(['dataTable:writeRow'], dataTableId);
 				const result = await dataTableService.deleteRows(
 					dataTableId,
@@ -1655,7 +1721,19 @@ export class InstanceAiAdapterService {
 					credentialTypes.add(credType);
 				}
 
-				// 3. Already-assigned credentials
+				// 3. Dynamic credential resolution for nodes that use genericCredentialType
+				// or predefinedCredentialType (e.g. HTTP Request). The credential type name
+				// is stored in the node parameters rather than the description's credentials array.
+				if (parameters.authentication === 'genericCredentialType' && parameters.genericAuthType) {
+					credentialTypes.add(parameters.genericAuthType as string);
+				} else if (
+					parameters.authentication === 'predefinedCredentialType' &&
+					parameters.nodeCredentialType
+				) {
+					credentialTypes.add(parameters.nodeCredentialType as string);
+				}
+
+				// 4. Already-assigned credentials
 				if (existingCredentials) {
 					for (const credType of Object.keys(existingCredentials)) {
 						credentialTypes.add(credType);
@@ -1780,6 +1858,7 @@ export class InstanceAiAdapterService {
 			executionPersistence,
 			eventService,
 		} = this;
+		const assertNotReadOnly = (resource: string) => this.assertInstanceNotReadOnly(resource);
 		const { assertProjectScope } = this.createProjectScopeHelpers(user);
 
 		const adapter: InstanceAiWorkspaceService = {
@@ -1817,6 +1896,7 @@ export class InstanceAiAdapterService {
 							projectId: string,
 							parentFolderId?: string,
 						): Promise<FolderSummary> {
+							assertNotReadOnly('folders');
 							await assertProjectScope(['folder:create'], projectId);
 							const folder = await folderService.createFolder(
 								{ name, parentFolderId: parentFolderId ?? undefined },
@@ -1834,6 +1914,7 @@ export class InstanceAiAdapterService {
 							projectId: string,
 							transferToFolderId?: string,
 						): Promise<void> {
+							assertNotReadOnly('folders');
 							await assertProjectScope(['folder:delete'], projectId);
 							await folderService.deleteFolder(user, folderId, projectId, {
 								transferToFolderId: transferToFolderId ?? undefined,
@@ -1841,6 +1922,7 @@ export class InstanceAiAdapterService {
 						},
 
 						async moveWorkflowToFolder(workflowId: string, folderId: string): Promise<void> {
+							assertNotReadOnly('workflows');
 							const workflow = await workflowFinderService.findWorkflowForUser(workflowId, user, [
 								'workflow:update',
 							]);
@@ -1855,6 +1937,7 @@ export class InstanceAiAdapterService {
 				: {}),
 
 			async tagWorkflow(workflowId: string, tagNames: string[]): Promise<string[]> {
+				assertNotReadOnly('workflows');
 				const workflow = await workflowFinderService.findWorkflowForUser(workflowId, user, [
 					'workflow:update',
 				]);
@@ -1909,6 +1992,7 @@ export class InstanceAiAdapterService {
 				workflowId: string,
 				options?: { olderThanHours?: number },
 			): Promise<{ deletedCount: number }> {
+				assertNotReadOnly('executions');
 				// Access-check the workflow with execute scope (matches controller behavior)
 				const workflow = await workflowFinderService.findWorkflowForUser(workflowId, user, [
 					'workflow:execute',
