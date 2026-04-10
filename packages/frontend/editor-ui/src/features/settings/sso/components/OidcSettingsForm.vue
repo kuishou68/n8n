@@ -4,13 +4,7 @@ import { MODAL_CONFIRM } from '@/app/constants';
 import { SupportedProtocols, useSSOStore } from '../sso.store';
 import { useI18n } from '@n8n/i18n';
 
-import {
-	N8nButton,
-	N8nCallout,
-	N8nInput,
-	N8nOption,
-	N8nSelect,
-} from '@n8n/design-system';
+import { N8nButton, N8nInput, N8nOption, N8nSelect } from '@n8n/design-system';
 import { computed, onMounted, ref } from 'vue';
 import { useToast } from '@/app/composables/useToast';
 import { useMessage } from '@/app/composables/useMessage';
@@ -230,9 +224,6 @@ onMounted(async () => {
 </script>
 <template>
 	<div>
-		<N8nCallout v-if="isOverrideActive" theme="info" :class="$style.group">
-			{{ i18n.baseText('settings.sso.settings.oidc.overrideBanner') }}
-		</N8nCallout>
 		<div :class="$style.card">
 			<slot name="protocol-select" />
 			<div :class="$style.group">
@@ -303,7 +294,11 @@ onMounted(async () => {
 			</div>
 		</div>
 		<div :class="$style.card">
-			<UserRoleProvisioningDropdown v-model="userRoleProvisioning" auth-protocol="oidc" />
+			<UserRoleProvisioningDropdown
+				v-model="userRoleProvisioning"
+				auth-protocol="oidc"
+				:disabled="isOverrideActive"
+			/>
 			<RoleMappingRuleEditor
 				v-if="userRoleProvisioning === 'expression_based'"
 				ref="roleMappingRuleEditorRef"

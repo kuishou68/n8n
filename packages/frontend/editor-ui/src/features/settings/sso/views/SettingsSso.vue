@@ -10,6 +10,7 @@ import { ElDialog } from 'element-plus';
 import {
 	N8nActionBox,
 	N8nButton,
+	N8nCallout,
 	N8nHeading,
 	N8nOption,
 	N8nSelect,
@@ -111,6 +112,13 @@ onMounted(() => {
 				{{ i18n.baseText('settings.sso.info.link') }}
 			</a>
 		</p>
+		<N8nCallout
+			v-if="ssoStore.oidcConfiguredByEnv"
+			theme="warning"
+			style="margin-bottom: var(--spacing--lg)"
+		>
+			{{ i18n.baseText('settings.sso.settings.oidc.overrideBanner') }}
+		</N8nCallout>
 		<!-- Protocol selector — rendered independently, like pre-PR2 -->
 		<div
 			v-if="hasAnySsoEnabled"
@@ -126,6 +134,7 @@ onMounted(() => {
 					filterable
 					size="medium"
 					:model-value="authProtocol"
+					:disabled="ssoStore.oidcConfiguredByEnv"
 					:placeholder="i18n.baseText('parameterInput.select')"
 					@update:model-value="onAuthProtocolUpdated"
 					@keydown.stop

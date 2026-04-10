@@ -509,6 +509,7 @@ describe('GlobalConfig', () => {
 			oidcLoginEnabled: false,
 			oidcPrompt: 'select_account',
 			oidcAcrValues: '',
+			ssoUserRoleProvisioning: 'disabled',
 		},
 	} satisfies GlobalConfigShape;
 

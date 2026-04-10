@@ -14,8 +14,9 @@ export type UserRoleProvisioningSetting =
 
 const value = defineModel<UserRoleProvisioningSetting>({ default: 'disabled' });
 
-const { authProtocol } = defineProps<{
+const { authProtocol, disabled = false } = defineProps<{
 	authProtocol: SupportedProtocolType;
+	disabled?: boolean;
 }>();
 
 const i18n = useI18n();
@@ -77,7 +78,7 @@ const userRoleProvisioningDescriptions = computed<UserRoleProvisioningDescriptio
 		<div :class="$style.controlColumn">
 			<N8nSelect
 				:model-value="value"
-				:disabled="!canManageUserProvisioning"
+				:disabled="disabled || !canManageUserProvisioning"
 				data-test-id="oidc-user-role-provisioning"
 				@update:model-value="handleUserRoleProvisioningChange"
 			>
